@@ -86,6 +86,7 @@ object EqRepo {
 
     fun gainsArray(): FloatArray = gains.toFloatArray()
 
+    @JvmName("setEnabledState")
     fun setEnabled(on: Boolean) {
         enabled = on
         persist()
@@ -106,18 +107,21 @@ object EqRepo {
         onChange?.invoke()
     }
 
+    @JvmName("setPreampValue")
     fun setPreamp(db: Float) {
         preamp = db.coerceIn(-12f, 0f)
         persist()
         onChange?.invoke()
     }
 
+    @JvmName("setAutoPreampState")
     fun setAutoPreamp(on: Boolean) {
         autoPreamp = on
         persist()
         onChange?.invoke()
     }
 
+    @JvmName("setAutoArmState")
     fun setAutoArm(on: Boolean) {
         autoArm = on
         persist()
