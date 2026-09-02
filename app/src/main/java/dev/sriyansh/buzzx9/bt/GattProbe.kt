@@ -295,6 +295,16 @@ object GattProbe {
                     return
                 }
                 line("   READ " + ch.uuid + " -> " + hex(v) + "  " + ascii(v))
+
+                // A standard Battery Level characteristic is one route to a charge figure
+                // when the hidden Bluetooth APIs refuse, so hand it to the Device tab.
+                if (ch.uuid.toString().lowercase().startsWith("00002a19") && v.isNotEmpty()) {
+                    val pct = v[0].toInt() and 0xFF
+                    if (pct in 0..100) {
+                        BatteryReader.recordGattLevel(address, pct)
+                        line("   -> recorded as battery level for " + address)
+                    }
+                }
             }
         }, BluetoothDevice.TRANSPORT_LE)
     }

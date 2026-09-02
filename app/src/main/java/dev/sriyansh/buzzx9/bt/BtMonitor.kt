@@ -4,6 +4,7 @@ import android.Manifest
 import android.bluetooth.BluetoothA2dp
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothHeadset
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.BroadcastReceiver
@@ -20,10 +21,17 @@ import androidx.core.content.ContextCompat
 
 private const val TAG = "BtMonitor"
 
+/** Hidden broadcast the Bluetooth stack sends when a headset reports its charge. */
+private const val ACTION_BATTERY_LEVEL_CHANGED =
+    "android.bluetooth.device.action.BATTERY_LEVEL_CHANGED"
+private const val EXTRA_BATTERY_LEVEL = "android.bluetooth.device.extra.BATTERY_LEVEL"
+
 data class BtDeviceInfo(
     val name: String,
     val address: String,
-    val batteryPercent: Int?, // null when the stack will not tell us
+    val battery: BatteryState,
+    val mediaConnected: Boolean,
+    val callsConnected: Boolean,
     val isLikelyBuzz: Boolean
 )
 
@@ -35,6 +43,7 @@ object BtMonitor {
 
     private var appContext: Context? = null
     private var a2dp: BluetoothA2dp? = null
+    private var headset: BluetoothHeadset? = null
     private var registered = false
 
     var connected = mutableStateListOf<BtDeviceInfo>()
@@ -53,12 +62,15 @@ object BtMonitor {
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            when (intent.action) {
-                BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED,
-                BluetoothDevice.ACTION_ACL_CONNECTED,
-                BluetoothDevice.ACTION_ACL_DISCONNECTED,
-                BluetoothAdapter.ACTION_STATE_CHANGED -> refresh()
+            if (intent.action == ACTION_BATTERY_LEVEL_CHANGED) {
+                val device: BluetoothDevice? =
+                    intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                val level = intent.getIntExtra(EXTRA_BATTERY_LEVEL, -1)
+                if (device != null && level >= 0) {
+                    BatteryReader.recordBroadcastLevel(device.address, level)
+                }
             }
+            refresh()
         }
     }
 
@@ -70,9 +82,11 @@ object BtMonitor {
         if (!registered) {
             val filter = IntentFilter().apply {
                 addAction(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED)
+                addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
                 addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
                 addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
                 addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
+                addAction(ACTION_BATTERY_LEVEL_CHANGED)
             }
             ContextCompat.registerReceiver(
                 ctx, receiver, filter, ContextCompat.RECEIVER_EXPORTED
@@ -81,20 +95,28 @@ object BtMonitor {
         }
 
         val adapter = adapter(ctx)
-        if (adapter != null && a2dp == null) {
-            runCatching {
-                adapter.getProfileProxy(ctx, object : BluetoothProfile.ServiceListener {
-                    override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
-                        if (profile == BluetoothProfile.A2DP) {
-                            a2dp = proxy as BluetoothA2dp
-                            refresh()
-                        }
+        if (adapter != null) {
+            val listener = object : BluetoothProfile.ServiceListener {
+                override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
+                    when (profile) {
+                        BluetoothProfile.A2DP -> a2dp = proxy as? BluetoothA2dp
+                        BluetoothProfile.HEADSET -> headset = proxy as? BluetoothHeadset
                     }
+                    refresh()
+                }
 
-                    override fun onServiceDisconnected(profile: Int) {
-                        if (profile == BluetoothProfile.A2DP) a2dp = null
+                override fun onServiceDisconnected(profile: Int) {
+                    when (profile) {
+                        BluetoothProfile.A2DP -> a2dp = null
+                        BluetoothProfile.HEADSET -> headset = null
                     }
-                }, BluetoothProfile.A2DP)
+                }
+            }
+            if (a2dp == null) {
+                runCatching { adapter.getProfileProxy(ctx, listener, BluetoothProfile.A2DP) }
+            }
+            if (headset == null) {
+                runCatching { adapter.getProfileProxy(ctx, listener, BluetoothProfile.HEADSET) }
             }
         }
         refresh()
@@ -117,9 +139,19 @@ object BtMonitor {
 
         val list = mutableListOf<BtDeviceInfo>()
         if (hasPermission && adapterOn) {
-            runCatching {
-                a2dp?.connectedDevices?.forEach { d -> list.add(describe(d)) }
-            }.onFailure { Log.w(TAG, "reading connected A2DP devices failed", it) }
+            val media = runCatching { a2dp?.connectedDevices }.getOrNull().orEmpty()
+            val calls = runCatching { headset?.connectedDevices }.getOrNull().orEmpty()
+            val callAddresses = calls.map { it.address }.toSet()
+
+            for (d in media) {
+                list.add(describe(d, media = true, calls = d.address in callAddresses))
+            }
+            // A headset connected for calls but not media still belongs in the list.
+            for (d in calls) {
+                if (list.none { it.address == d.address }) {
+                    list.add(describe(d, media = false, calls = true))
+                }
+            }
         }
 
         connected.clear()
@@ -134,27 +166,18 @@ object BtMonitor {
         }
     }
 
-    private fun describe(d: BluetoothDevice): BtDeviceInfo {
+    private fun describe(d: BluetoothDevice, media: Boolean, calls: Boolean): BtDeviceInfo {
         val name = runCatching { d.name }.getOrNull() ?: "(unnamed)"
         return BtDeviceInfo(
             name = name,
             address = d.address,
-            batteryPercent = readBattery(d),
+            battery = BatteryReader.read(d),
+            mediaConnected = media,
+            callsConnected = calls,
             isLikelyBuzz = name.contains("buzz", ignoreCase = true) ||
                 name.contains("dubstep", ignoreCase = true)
         )
     }
-
-    /**
-     * BluetoothDevice.getBatteryLevel() is a hidden API. On some builds reflection still
-     * works; on others the non-SDK-interface blocklist kills it. There is no public
-     * replacement, so we ask nicely and report "unknown" when refused -- never a guess.
-     */
-    private fun readBattery(d: BluetoothDevice): Int? = runCatching {
-        val m = BluetoothDevice::class.java.getMethod("getBatteryLevel")
-        val level = m.invoke(d) as? Int ?: return@runCatching null
-        if (level in 0..100) level else null
-    }.getOrNull()
 
     fun stop() {
         val ctx = appContext ?: return
@@ -162,9 +185,10 @@ object BtMonitor {
             runCatching { ctx.unregisterReceiver(receiver) }
             registered = false
         }
-        a2dp?.let { proxy ->
-            runCatching { adapter(ctx)?.closeProfileProxy(BluetoothProfile.A2DP, proxy) }
-        }
+        val adapter = adapter(ctx)
+        a2dp?.let { runCatching { adapter?.closeProfileProxy(BluetoothProfile.A2DP, it) } }
+        headset?.let { runCatching { adapter?.closeProfileProxy(BluetoothProfile.HEADSET, it) } }
         a2dp = null
+        headset = null
     }
 }

@@ -132,7 +132,9 @@ class EqService : Service() {
 
     private fun reapply() {
         val live = shouldBeActive()
-        engine.applyAll(live, EqRepo.gainsArray(), EqRepo.effectivePreamp())
+        engine.applyAll(
+            live, EqRepo.gainsArray(), EqRepo.effectivePreamp(), EqRepo.activeIsolation()
+        )
         publishStatus()
         updateNotification()
     }
@@ -177,7 +179,11 @@ class EqService : Service() {
         val text = when {
             !live && bound != null -> "Waiting for $bound"
             !live -> "Idle"
-            else -> Presets.byName(EqRepo.presetName)?.name ?: EqRepo.presetName
+            else -> {
+                val preset = Presets.byName(EqRepo.presetName)?.name ?: EqRepo.presetName
+                val iso = EqRepo.activeIsolation()
+                if (iso == null) preset else "$preset  +  Isolation ${iso.label}"
+            }
         }
 
         return NotificationCompat.Builder(this, CHANNEL_ID)

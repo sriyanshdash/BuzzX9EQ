@@ -24,8 +24,8 @@ can find out in five seconds, and the fix is a Developer Options toggle (below).
 
 | Tab | What it is for |
 | --- | --- |
-| **Equalizer** | Ten ISO-octave bands at ±12 dB, eight presets, curve preview, automatic pre-amp headroom so boosts do not clip. |
-| **Device** | Which A2DP device is connected, bind one as "my Buzz X9", auto-arm so the curve only goes live for those buds, battery if the stack will say, and the gesture cheat-sheet from the manual. |
+| **Equalizer** | Ten ISO-octave bands at ±12 dB, each labelled with what actually lives in it and an optional plain-language guide. Eight presets plus your own saved curves. Isolation mode. Curve preview and automatic pre-amp headroom. |
+| **Device** | Which device is connected and on which profiles, bind one as "my Buzz X9", auto-arm so the curve only goes live for those buds, per-earbud charge where the platform will report it, and the gesture cheat-sheet from the manual. |
 | **Probe** | Test tone diagnostic, plus a read-only BLE/SDP dump of what the earbuds advertise. |
 
 ### Why the Probe tab exists
@@ -38,6 +38,32 @@ and gesture remapping become buildable. If nothing does, phone-side EQ is the ce
 you will know for certain rather than guessing.
 
 The probe only ever reads. It never writes to the earbuds.
+
+### Isolation mode is not noise cancellation
+
+The Buzz X9 advertises ENC. ENC cleans up *your voice* on the microphone so the person you
+are calling hears less of your background. It does nothing to what you hear, it runs only
+during calls, and it lives in the earbud firmware. These buds have no ANC at all, and no
+app can add it — cancelling sound requires a microphone and a speaker inside the ear, both
+under the earbud's control, which is a hardware property.
+
+What Isolation mode does instead is real and it is what actually helps on a bus: multiband
+compression. In a noisy place the quiet parts of a track fall below the ambient noise floor
+and vanish, so you turn the volume up and then get blasted by the chorus. Compressing each
+frequency band separately lifts the quiet passages and leaves the loud ones alone. The EQ
+curve is untouched, so tonal balance does not change.
+
+It needs a compressor stage from the audio HAL. If the HAL refuses one, the app says so and
+disables the mode rather than pretending — and the equalizer keeps working regardless.
+
+### Battery
+
+Android has no public API for earbud charge. The app tries four routes in order —
+`getMetadata()` for per-earbud figures, `getBatteryLevel()` for a combined one, the hidden
+`BATTERY_LEVEL_CHANGED` broadcast, and the BLE Battery Service if the Probe tab finds one —
+and shows whichever answers, with a panel listing exactly what was tried. Separate left and
+right readings need a vendor pairing protocol that no-name TWS generally do not implement,
+so a single combined figure is the realistic best case. Nothing is ever estimated.
 
 ## Building the APK
 
@@ -92,12 +118,14 @@ over the label.
 ```
 app/src/main/java/dev/sriyansh/buzzx9/
   MainActivity.kt          three-tab Compose shell, runtime permissions
-  audio/Bands.kt           the ten crossover frequencies
-  audio/Presets.kt         preset curves
+  audio/Bands.kt           the ten crossover frequencies and their plain-language guide
+  audio/Presets.kt         built-in curves plus save/delete for user presets
+  audio/Isolation.kt       compressor settings behind Isolation mode
   audio/EqRepo.kt          settings state, persisted to SharedPreferences
   audio/EqEngine.kt        DynamicsProcessing chain, legacy Equalizer fallback
   audio/TestTone.kt        AudioTrack sine generator for the diagnostic
-  bt/BtMonitor.kt          A2DP connection state, hidden-API battery read
+  bt/BtMonitor.kt          A2DP and HFP connection state
+  bt/BatteryReader.kt      the four battery routes, and what each one said
   bt/BtEventReceiver.kt    restarts the service on boot and on ACL connect
   bt/GattProbe.kt          BLE scan, GATT dump, SDP dump, vendor fingerprints
   service/EqService.kt     foreground service that owns the effect chain
