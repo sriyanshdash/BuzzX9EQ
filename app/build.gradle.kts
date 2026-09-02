@@ -4,6 +4,12 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Release signing is driven by environment, so the repository never holds a keystore.
+// When the variables are absent -- every local build, and CI without the secrets set --
+// the release type simply stays unsigned and the workflow falls back to a debug APK.
+val keystorePath: String? = System.getenv("KEYSTORE_FILE")
+val hasReleaseSigning = !keystorePath.isNullOrBlank() && file(keystorePath).exists()
+
 android {
     namespace = "dev.sriyansh.buzzx9"
     compileSdk = 35
@@ -12,13 +18,29 @@ android {
         applicationId = "dev.sriyansh.buzzx9"
         minSdk = 28
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        // A tagged release stamps its own version; otherwise this is a dev build.
+        versionCode = (System.getenv("APK_VERSION_CODE") ?: "1").toIntOrNull() ?: 1
+        versionName = (System.getenv("APK_VERSION_NAME") ?: "").removePrefix("v")
+            .ifBlank { "1.0-dev" }
+    }
+
+    if (hasReleaseSigning) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(keystorePath!!)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
         debug {
             isMinifyEnabled = false

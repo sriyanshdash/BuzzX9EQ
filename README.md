@@ -85,6 +85,55 @@ There is no local toolchain requirement — GitHub Actions builds it.
 
 The APK is debug-signed, which is all that sideloading needs.
 
+## Releasing
+
+Tagging publishes a GitHub Release with the APK attached, which is the whole distribution
+story for an app like this — no store account, no review, no fee:
+
+```bash
+git tag v1.1
+git push origin v1.1
+```
+
+The `Release` workflow builds, writes a changelog from the commits since the previous tag,
+and attaches `BuzzX9EQ-1.1.apk` to the release. You can also run it by hand from the
+Actions tab, passing the tag to create. Anyone with the link installs it the same way you
+did, and [Obtainium](https://github.com/ImranR98/Obtainium) will track the repo and
+auto-update from releases the way a store would.
+
+### Signed releases
+
+Without signing secrets the workflow ships a **debug-signed** APK, and CI generates a fresh
+debug key on every run. Android refuses to install an update whose signature differs from
+the installed copy, so each release would need the previous one uninstalled first — losing
+your saved presets with it.
+
+Fixing that permanently means one real keystore, held in repository secrets and never
+committed:
+
+1. Generate it (needs `keytool`, which ships with any JDK):
+
+   ```bash
+   keytool -genkeypair -v -keystore release.jks -alias buzzx9 \
+     -keyalg RSA -keysize 4096 -validity 10000
+   ```
+
+2. Base64-encode it so it survives as a secret:
+
+   ```bash
+   base64 -w0 release.jks > release.jks.b64     # Git Bash
+   ```
+
+3. In **Settings → Secrets and variables → Actions**, add four repository secrets:
+   `KEYSTORE_BASE64` (the contents of the `.b64` file), `KEYSTORE_PASSWORD`, `KEY_ALIAS`
+   (`buzzx9`), and `KEY_PASSWORD`.
+
+4. Back up `release.jks` somewhere safe and **never commit it**. Lose it and no future
+   build can ever upgrade an installed copy — every user has to uninstall and start over.
+
+The build reads these from the environment, so a missing keystore just means an unsigned
+release type. Local builds are unaffected.
+
 ## Installing on the phone
 
 Transfer the APK to the phone and open it. Nothing OS will ask you to allow installing

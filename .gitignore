@@ -7,3 +7,8 @@ build/
 captures/
 .externalNativeBuild
 .cxx
+
+# Signing material must never be committed.
+*.jks
+*.keystore
+*.b64
